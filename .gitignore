@@ -1,0 +1,53 @@
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Signing keys & secrets
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+google-services.json
+GoogleService-Info.plist
+
+# Logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local build artifacts (published via GitHub Releases, not git)
+*.apk
+*.aab
+*.ipa
+
+# Android local build
+android/.gradle/
+android/.cxx/
+android/build/
+android/app/build/
+android/local.properties
+
+# iOS local build
+ios/Pods/
+ios/build/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+
+# Cursor / AI transcripts
+.cursor-history/
