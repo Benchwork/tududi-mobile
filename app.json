@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tududi",
     "slug": "tududi-mobile",
-    "version": "0.0.1",
+    "version": "0.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "tududi",

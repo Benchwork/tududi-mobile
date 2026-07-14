@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/Screen';
 import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
+import { TextPromptModal } from '@/components/TextPromptModal';
 import { OfflineBanner } from '@/components/OfflineBanner';
 import { useAreas, useCreateArea } from '@/features/areas/queries';
 import { useTags } from '@/features/tags/queries';
@@ -24,6 +25,7 @@ export default function MoreScreen() {
     const { data: areas = [] } = useAreas();
     const { data: tags = [] } = useTags();
     const createArea = useCreateArea();
+    const [newAreaOpen, setNewAreaOpen] = useState(false);
 
     const onLogout = () => {
         Alert.alert('Sign out?', 'You can sign back in on this device at any time.', [
@@ -38,12 +40,6 @@ export default function MoreScreen() {
                 },
             },
         ]);
-    };
-
-    const onNewArea = () => {
-        Alert.prompt?.('New area', 'Name', async (name?: string) => {
-            if (name?.trim()) await createArea.mutateAsync({ name: name.trim() });
-        });
     };
 
     const themeOptions: Array<{ id: ThemePreference; label: string }> = [
@@ -102,7 +98,7 @@ export default function MoreScreen() {
                         <Text style={[styles.section, { color: palette.text }]}>
                             Areas ({areas.length})
                         </Text>
-                        <Pressable onPress={onNewArea} hitSlop={8}>
+                        <Pressable onPress={() => setNewAreaOpen(true)} hitSlop={8}>
                             <Text style={{ color: palette.primary, fontWeight: '600' }}>+ New</Text>
                         </Pressable>
                     </View>
@@ -196,6 +192,19 @@ export default function MoreScreen() {
 
                 <Button title="Sign out" variant="danger" onPress={onLogout} full />
             </ScrollView>
+            <TextPromptModal
+                visible={newAreaOpen}
+                title="New area"
+                message="Name your area"
+                placeholder="Area name"
+                submitLabel="Create"
+                loading={createArea.isPending}
+                onCancel={() => setNewAreaOpen(false)}
+                onSubmit={async (name) => {
+                    await createArea.mutateAsync({ name });
+                    setNewAreaOpen(false);
+                }}
+            />
         </Screen>
     );
 }

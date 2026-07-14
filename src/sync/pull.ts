@@ -1,4 +1,5 @@
 import { endpoints } from '../api/endpoints';
+import { normalizeTaskFromServer } from '../api/taskMaps';
 import {
     areasRepo,
     inboxRepo,
@@ -33,7 +34,7 @@ export async function pullAll(): Promise<PullResult> {
     const lastSync = (await metaRepo.get('last_sync_at')) ?? undefined;
 
     const [tasks, projects, areas, notes, tags, inbox] = await Promise.all([
-        runSafe(() => endpoints.tasks.list({ status: 'all', updated_since: lastSync }), errors, 'tasks'),
+        runSafe(() => endpoints.tasks.list({ type: 'all', status: 'all', updated_since: lastSync }), errors, 'tasks'),
         runSafe(() => endpoints.projects.list({ updated_since: lastSync }), errors, 'projects'),
         runSafe(() => endpoints.areas.list(), errors, 'areas'),
         runSafe(() => endpoints.notes.list(), errors, 'notes'),
@@ -43,7 +44,7 @@ export async function pullAll(): Promise<PullResult> {
 
     for (const a of areas) await areasRepo.upsertServer(a);
     for (const p of projects) await projectsRepo.upsertServer(p);
-    for (const t of tasks) await tasksRepo.upsertServer(t);
+    for (const t of tasks) await tasksRepo.upsertServer(normalizeTaskFromServer(t));
     for (const n of notes) await notesRepo.upsertServer(n);
     for (const tg of tags) await tagsRepo.upsertServer(tg);
     for (const i of inbox) await inboxRepo.upsertServer(i);

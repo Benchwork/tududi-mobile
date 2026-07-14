@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tasksRepo, type TaskQuery } from '../../db/repositories';
 import type { Task } from '../../types/tududi';
+import { toServerTaskPayload } from '../../api/taskMaps';
 import { enqueue } from '../../sync/outbox';
 import { useSyncStore } from '../../sync/scheduler';
 
@@ -83,7 +84,10 @@ export function useToggleTask() {
                 'tasks',
                 'update',
                 task.uid!,
-                { status: task.status, completed_at: task.completed_at },
+                toServerTaskPayload({
+                    status: task.status,
+                    completed_at: task.completed_at,
+                }) as Partial<Task>,
                 task.id && task.id > 0 ? task.id : undefined
             );
             invalidateTasks(qc);
@@ -117,7 +121,7 @@ export function useDeleteTask() {
 }
 
 function buildTaskPayload(t: Task): Partial<Task> {
-    return {
+    return toServerTaskPayload({
         name: t.name,
         note: t.note ?? null,
         status: t.status ?? 'pending',
@@ -132,5 +136,5 @@ function buildTaskPayload(t: Task): Partial<Task> {
         recurring_week_of_month: t.recurring_week_of_month ?? null,
         recurrence_completion_based: t.recurrence_completion_based ?? false,
         completed_at: t.completed_at ?? null,
-    };
+    }) as Partial<Task>;
 }

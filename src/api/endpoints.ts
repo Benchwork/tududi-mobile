@@ -39,7 +39,8 @@ export const auth = {
 };
 
 export interface TaskListParams {
-    status?: 'pending' | 'completed' | 'archived' | 'all';
+    type?: 'today' | 'upcoming' | 'completed' | 'archived' | 'all';
+    status?: 'pending' | 'completed' | 'archived' | 'all' | 'active';
     filter?: 'today' | 'upcoming' | 'someday' | 'completed';
     project_id?: number;
     tag?: string;
@@ -61,10 +62,10 @@ export const tasks = {
     update: (id: number | string, input: Partial<Task>) =>
         api.patch<Task>(`/task/${id}`, input),
     complete: (id: number | string) =>
-        api.patch<Task>(`/task/${id}`, { status: 'completed' }),
+        api.patch<Task>(`/task/${id}`, { status: 'done' }),
     delete: (id: number | string) => api.delete<void>(`/task/${id}`),
     toggle: (id: number | string, completed: boolean) =>
-        api.patch<Task>(`/task/${id}`, { status: completed ? 'completed' : 'pending' }),
+        api.patch<Task>(`/task/${id}`, { status: completed ? 'done' : 'not_started' }),
     subtasks: async (parentId: number | string): Promise<Task[]> => {
         const data = await api.get<unknown>(`/task/${parentId}/subtasks`);
         return coerceList<Task>(data, 'subtasks');

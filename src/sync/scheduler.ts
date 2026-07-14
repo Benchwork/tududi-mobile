@@ -54,6 +54,13 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
         try {
             lastPush = await drainOutbox();
             lastPull = await pullAll();
+            const syncErrors = [
+                ...(lastPush?.errors ?? []),
+                ...(lastPull?.errors ?? []),
+            ];
+            if (syncErrors.length > 0) {
+                error = syncErrors.join('; ');
+            }
         } catch (err) {
             error = err instanceof Error ? err.message : String(err);
         } finally {

@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { runDb, withDb } from './database';
 import { newClientUid } from './uid';
+import { toLocalTaskStatus } from '../api/taskMaps';
 import type {
     Area,
     InboxItem,
@@ -65,7 +66,7 @@ function rowToTask(row: TaskRow): Task {
         uid: row.uid,
         name: row.name,
         note: row.note ?? undefined,
-        status: row.status ?? undefined,
+        status: toLocalTaskStatus(row.status),
         priority: row.priority ?? undefined,
         due_date: row.due_date ?? undefined,
         project_id: row.project_id ?? undefined,
@@ -175,9 +176,61 @@ export const tasksRepo = {
         });
     },
 
-    async upsertServer(task: Task): Promise<void> {
+    async getById(id: number): Promise<Task | null> {
         return withDb(async (db) => {
-            const uid = task.uid ?? `srv_${task.id}`;
+            const row = await db.getFirstAsync<TaskRow>(
+                'SELECT * FROM tasks WHERE id = ? LIMIT 1',
+                [id]
+            );
+            return row ? rowToTask(row) : null;
+        });
+    },
+
+    async upsertServer(task: Task): Promise<void> {
+        if (task.id == null || task.id <= 0) {
+            return;
+        }
+        const serverUid = (task.uid && task.uid.trim()) || `srv_${task.id}`;
+        return withDb(async (db) => {
+            const existing = await db.getFirstAsync<TaskRow>(
+                'SELECT * FROM tasks WHERE id = ?',
+                [task.id]
+            );
+            if (existing) {
+                if (existing._dirty === 1) {
+                    return;
+                }
+                await db.runAsync(
+                    `UPDATE tasks SET
+                        uid = ?, name = ?, note = ?, status = ?, priority = ?, due_date = ?,
+                        project_id = ?, parent_task_id = ?, recurring_pattern = ?,
+                        recurring_interval = ?, recurring_end_date = ?, recurring_weekday = ?,
+                        recurring_week_of_month = ?, recurrence_completion_based = ?,
+                        completed_at = ?, created_at = ?, updated_at = ?
+                     WHERE id = ? AND _dirty = 0`,
+                    [
+                        serverUid,
+                        task.name,
+                        task.note ?? null,
+                        task.status ?? null,
+                        task.priority ?? null,
+                        task.due_date ?? null,
+                        task.project_id ?? null,
+                        task.parent_task_id ?? null,
+                        task.recurring_pattern ?? null,
+                        task.recurring_interval ?? null,
+                        task.recurring_end_date ?? null,
+                        task.recurring_weekday ?? null,
+                        task.recurring_week_of_month ?? null,
+                        boolToInt(task.recurrence_completion_based ?? null),
+                        task.completed_at ?? null,
+                        task.created_at ?? null,
+                        task.updated_at ?? null,
+                        task.id,
+                    ]
+                );
+                return;
+            }
             await db.runAsync(
                 `INSERT INTO tasks (
                     id, uid, name, note, status, priority, due_date, project_id,
@@ -206,8 +259,8 @@ export const tasksRepo = {
                     updated_at = excluded.updated_at
                 WHERE _dirty = 0`,
                 [
-                    task.id ?? null,
-                    uid,
+                    task.id,
+                    serverUid,
                     task.name,
                     task.note ?? null,
                     task.status ?? null,
@@ -382,7 +435,16 @@ export const tasksRepo = {
         );
     },
 
-    async clearDirty(uid: string, serverId?: number): Promise<void> {
+    async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
+        const s = serverUid?.trim();
+        if (s && s.length > 0 && s !== uid) {
+            return runDb((db) =>
+                db.runAsync(
+                    'UPDATE tasks SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
+                    [serverId ?? null, s, uid]
+                )
+            );
+        }
         return runDb((db) =>
             db.runAsync(
                 'UPDATE tasks SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id) WHERE uid = ?',
@@ -468,8 +530,40 @@ export const projectsRepo = {
         });
     },
     async upsertServer(p: Project): Promise<void> {
+        if (p.id == null || p.id <= 0) {
+            return;
+        }
+        const serverUid = (p.uid && p.uid.trim()) || `srv_${p.id}`;
         return withDb(async (db) => {
-            const uid = p.uid ?? `srv_${p.id}`;
+            const existing = await db.getFirstAsync<ProjectRow>(
+                'SELECT * FROM projects WHERE id = ?',
+                [p.id]
+            );
+            if (existing) {
+                if (existing._dirty === 1) {
+                    return;
+                }
+                await db.runAsync(
+                    `UPDATE projects SET
+                        uid = ?, name = ?, description = ?, status = ?, priority = ?,
+                        area_id = ?, active = ?, pin_to_sidebar = ?, created_at = ?, updated_at = ?
+                     WHERE id = ? AND _dirty = 0`,
+                    [
+                        serverUid,
+                        p.name,
+                        p.description ?? null,
+                        p.status ?? null,
+                        p.priority ?? null,
+                        p.area_id ?? null,
+                        boolToInt(p.active ?? null),
+                        boolToInt(p.pin_to_sidebar ?? null),
+                        p.created_at ?? null,
+                        p.updated_at ?? null,
+                        p.id,
+                    ]
+                );
+                return;
+            }
             await db.runAsync(
                 `INSERT INTO projects (
                     id, uid, name, description, status, priority, area_id, active,
@@ -484,8 +578,8 @@ export const projectsRepo = {
                     created_at = excluded.created_at, updated_at = excluded.updated_at
                 WHERE _dirty = 0`,
                 [
-                    p.id ?? null,
-                    uid,
+                    p.id,
+                    serverUid,
                     p.name,
                     p.description ?? null,
                     p.status ?? null,
@@ -593,7 +687,24 @@ export const projectsRepo = {
     async purge(uid: string): Promise<void> {
         return runDb((db) => db.runAsync('DELETE FROM projects WHERE uid = ?', [uid]));
     },
-    async clearDirty(uid: string, serverId?: number): Promise<void> {
+    async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
+        return runDb((db) =>
+            db.runAsync(
+                'UPDATE projects SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
+                [serverUid, serverId, oldUid]
+            )
+        );
+    },
+    async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
+        const s = serverUid?.trim();
+        if (s && s.length > 0 && s !== uid) {
+            return runDb((db) =>
+                db.runAsync(
+                    'UPDATE projects SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
+                    [serverId ?? null, s, uid]
+                )
+            );
+        }
         return runDb((db) =>
             db.runAsync(
                 'UPDATE projects SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id) WHERE uid = ?',
@@ -649,9 +760,51 @@ export const areasRepo = {
             };
         });
     },
-    async upsertServer(a: Area): Promise<void> {
+    async getByUid(uid: string): Promise<Area | null> {
         return withDb(async (db) => {
-            const uid = a.uid ?? `srv_${a.id}`;
+            const r = await db.getFirstAsync<AreaRow>(
+                'SELECT * FROM areas WHERE uid = ?',
+                [uid]
+            );
+            if (!r) return null;
+            return {
+                id: r.id ?? 0,
+                uid: r.uid,
+                name: r.name,
+                description: r.description ?? undefined,
+                created_at: r.created_at ?? undefined,
+                updated_at: r.updated_at ?? undefined,
+            };
+        });
+    },
+    async upsertServer(a: Area): Promise<void> {
+        if (a.id == null || a.id <= 0) {
+            return;
+        }
+        const serverUid = (a.uid && a.uid.trim()) || `srv_${a.id}`;
+        return withDb(async (db) => {
+            const existing = await db.getFirstAsync<AreaRow>(
+                'SELECT * FROM areas WHERE id = ?',
+                [a.id]
+            );
+            if (existing) {
+                if (existing._dirty === 1) {
+                    return;
+                }
+                await db.runAsync(
+                    `UPDATE areas SET uid = ?, name = ?, description = ?, created_at = ?, updated_at = ?
+                     WHERE id = ? AND _dirty = 0`,
+                    [
+                        serverUid,
+                        a.name,
+                        a.description ?? null,
+                        a.created_at ?? null,
+                        a.updated_at ?? null,
+                        a.id,
+                    ]
+                );
+                return;
+            }
             await db.runAsync(
                 `INSERT INTO areas (id, uid, name, description, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,0,0,0,NULL)
@@ -660,8 +813,8 @@ export const areasRepo = {
                     created_at = excluded.created_at, updated_at = excluded.updated_at
                  WHERE _dirty = 0`,
                 [
-                    a.id ?? null,
-                    uid,
+                    a.id,
+                    serverUid,
                     a.name,
                     a.description ?? null,
                     a.created_at ?? null,
@@ -728,7 +881,16 @@ export const areasRepo = {
             return 'tombstoned';
         });
     },
-    async clearDirty(uid: string, serverId?: number): Promise<void> {
+    async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
+        const s = serverUid?.trim();
+        if (s && s.length > 0 && s !== uid) {
+            return runDb((db) =>
+                db.runAsync(
+                    'UPDATE areas SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
+                    [serverId ?? null, s, uid]
+                )
+            );
+        }
         return runDb((db) =>
             db.runAsync(
                 'UPDATE areas SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id) WHERE uid = ?',
@@ -738,6 +900,14 @@ export const areasRepo = {
     },
     async purge(uid: string): Promise<void> {
         return runDb((db) => db.runAsync('DELETE FROM areas WHERE uid = ?', [uid]));
+    },
+    async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
+        return runDb((db) =>
+            db.runAsync(
+                'UPDATE areas SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
+                [serverUid, serverId, oldUid]
+            )
+        );
     },
 };
 
@@ -813,9 +983,55 @@ export const notesRepo = {
             };
         });
     },
-    async upsertServer(n: Note): Promise<void> {
+    async getByUid(uid: string): Promise<Note | null> {
         return withDb(async (db) => {
-            const uid = n.uid ?? `srv_${n.id}`;
+            const r = await db.getFirstAsync<NoteRow>(
+                'SELECT * FROM notes WHERE uid = ?',
+                [uid]
+            );
+            if (!r) return null;
+            return {
+                id: r.id ?? 0,
+                uid: r.uid,
+                title: r.title ?? undefined,
+                content: r.content ?? undefined,
+                color: r.color ?? undefined,
+                project_id: r.project_id ?? undefined,
+                created_at: r.created_at ?? undefined,
+                updated_at: r.updated_at ?? undefined,
+            };
+        });
+    },
+    async upsertServer(n: Note): Promise<void> {
+        if (n.id == null || n.id <= 0) {
+            return;
+        }
+        const serverUid = (n.uid && n.uid.trim()) || `srv_${n.id}`;
+        return withDb(async (db) => {
+            const existing = await db.getFirstAsync<NoteRow>(
+                'SELECT * FROM notes WHERE id = ?',
+                [n.id]
+            );
+            if (existing) {
+                if (existing._dirty === 1) {
+                    return;
+                }
+                await db.runAsync(
+                    `UPDATE notes SET uid = ?, title = ?, content = ?, color = ?, project_id = ?, created_at = ?, updated_at = ?
+                     WHERE id = ? AND _dirty = 0`,
+                    [
+                        serverUid,
+                        n.title ?? null,
+                        n.content ?? null,
+                        n.color ?? null,
+                        n.project_id ?? null,
+                        n.created_at ?? null,
+                        n.updated_at ?? null,
+                        n.id,
+                    ]
+                );
+                return;
+            }
             await db.runAsync(
                 `INSERT INTO notes (id, uid, title, content, color, project_id, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,?,?,0,0,0,NULL)
@@ -825,8 +1041,8 @@ export const notesRepo = {
                     created_at = excluded.created_at, updated_at = excluded.updated_at
                  WHERE _dirty = 0`,
                 [
-                    n.id ?? null,
-                    uid,
+                    n.id,
+                    serverUid,
                     n.title ?? null,
                     n.content ?? null,
                     n.color ?? null,
@@ -908,7 +1124,16 @@ export const notesRepo = {
             return 'tombstoned';
         });
     },
-    async clearDirty(uid: string, serverId?: number): Promise<void> {
+    async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
+        const s = serverUid?.trim();
+        if (s && s.length > 0 && s !== uid) {
+            return runDb((db) =>
+                db.runAsync(
+                    'UPDATE notes SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
+                    [serverId ?? null, s, uid]
+                )
+            );
+        }
         return runDb((db) =>
             db.runAsync(
                 'UPDATE notes SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id) WHERE uid = ?',
@@ -918,6 +1143,14 @@ export const notesRepo = {
     },
     async purge(uid: string): Promise<void> {
         return runDb((db) => db.runAsync('DELETE FROM notes WHERE uid = ?', [uid]));
+    },
+    async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
+        return runDb((db) =>
+            db.runAsync(
+                'UPDATE notes SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
+                [serverUid, serverId, oldUid]
+            )
+        );
     },
 };
 
@@ -977,6 +1210,7 @@ interface InboxRow {
 
 export const inboxRepo = {
     async list(): Promise<InboxItem[]> {
+        await inboxRepo.deduplicateByServerId();
         return withDb(async (db) => {
             const rows = await db.getAllAsync<InboxRow>(
                 `SELECT * FROM inbox_items WHERE _deleted = 0 AND (status IS NULL OR status != 'processed') ORDER BY created_at DESC`
@@ -994,9 +1228,76 @@ export const inboxRepo = {
             );
         });
     },
-    async upsertServer(i: InboxItem): Promise<void> {
+    async getByUid(uid: string): Promise<InboxItem | null> {
         return withDb(async (db) => {
-            const uid = i.uid ?? `srv_${i.id}`;
+            const r = await db.getFirstAsync<InboxRow>(
+                'SELECT * FROM inbox_items WHERE uid = ?',
+                [uid]
+            );
+            if (!r) return null;
+            return {
+                id: r.id ?? 0,
+                uid: r.uid,
+                content: r.content,
+                status: (r.status as InboxItem['status']) ?? undefined,
+                source: r.source ?? undefined,
+                created_at: r.created_at ?? undefined,
+                updated_at: r.updated_at ?? undefined,
+            };
+        });
+    },
+    async getById(id: number): Promise<InboxItem | null> {
+        return withDb(async (db) => {
+            const r = await db.getFirstAsync<InboxRow>(
+                'SELECT * FROM inbox_items WHERE id = ?',
+                [id]
+            );
+            if (!r) return null;
+            return {
+                id: r.id ?? 0,
+                uid: r.uid,
+                content: r.content,
+                status: (r.status as InboxItem['status']) ?? undefined,
+                source: r.source ?? undefined,
+                created_at: r.created_at ?? undefined,
+                updated_at: r.updated_at ?? undefined,
+            };
+        });
+    },
+    /**
+     * Merge a server inbox row. Prefer matching by **server id** so we do not insert a
+     * second row when the local row still uses a client-generated `uid` but already has
+     * the same `id` after a successful create push.
+     */
+    async upsertServer(i: InboxItem): Promise<void> {
+        if (i.id == null || i.id <= 0) {
+            return;
+        }
+        const serverUid = (i.uid && i.uid.trim()) || `srv_${i.id}`;
+        return withDb(async (db) => {
+            const existing = await db.getFirstAsync<InboxRow>(
+                'SELECT * FROM inbox_items WHERE id = ?',
+                [i.id]
+            );
+            if (existing) {
+                if (existing._dirty === 1) {
+                    return;
+                }
+                await db.runAsync(
+                    `UPDATE inbox_items SET uid = ?, content = ?, status = ?, source = ?, created_at = ?, updated_at = ?
+                     WHERE id = ? AND _dirty = 0`,
+                    [
+                        serverUid,
+                        i.content,
+                        i.status ?? null,
+                        i.source ?? null,
+                        i.created_at ?? null,
+                        i.updated_at ?? null,
+                        i.id,
+                    ]
+                );
+                return;
+            }
             await db.runAsync(
                 `INSERT INTO inbox_items (id, uid, content, status, source, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,?,0,0,0,NULL)
@@ -1005,8 +1306,8 @@ export const inboxRepo = {
                     source = excluded.source, created_at = excluded.created_at, updated_at = excluded.updated_at
                  WHERE _dirty = 0`,
                 [
-                    i.id ?? null,
-                    uid,
+                    i.id,
+                    serverUid,
                     i.content,
                     i.status ?? null,
                     i.source ?? null,
@@ -1062,13 +1363,62 @@ export const inboxRepo = {
             return 'tombstoned';
         });
     },
-    async clearDirty(uid: string, serverId?: number): Promise<void> {
+    async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
+        return runDb((db) =>
+            db.runAsync(
+                'UPDATE inbox_items SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
+                [serverUid, serverId, oldUid]
+            )
+        );
+    },
+    /**
+     * After a successful push, optionally set `uid` to the server's canonical value so the
+     * next pull does not look like a different row.
+     */
+    async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
+        const s = serverUid?.trim();
+        if (s && s.length > 0 && s !== uid) {
+            return runDb((db) =>
+                db.runAsync(
+                    'UPDATE inbox_items SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
+                    [serverId ?? null, s, uid]
+                )
+            );
+        }
         return runDb((db) =>
             db.runAsync(
                 'UPDATE inbox_items SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id) WHERE uid = ?',
                 [serverId ?? null, uid]
             )
         );
+    },
+
+    /**
+     * Remove duplicate rows that share the same server `id` (legacy bug). Keeps a single row
+     * per `id` (prefers the one that still has pending local changes, then the lowest rowid).
+     */
+    async deduplicateByServerId(): Promise<void> {
+        return withDb(async (db) => {
+            const groups = await db.getAllAsync<{ id: number }>(
+                `SELECT id FROM inbox_items
+                 WHERE _deleted = 0 AND id IS NOT NULL AND id > 0
+                 GROUP BY id
+                 HAVING COUNT(*) > 1`
+            );
+            for (const { id } of groups) {
+                const rows = await db.getAllAsync<{ rowid: number; _dirty: number }>(
+                    `SELECT rowid, _dirty FROM inbox_items
+                     WHERE id = ? AND _deleted = 0
+                     ORDER BY _dirty DESC, rowid ASC`,
+                    [id]
+                );
+                if (rows.length < 2) continue;
+                const [, ...dups] = rows;
+                for (const r of dups) {
+                    await db.runAsync('DELETE FROM inbox_items WHERE rowid = ?', [r.rowid]);
+                }
+            }
+        });
     },
     async purge(uid: string): Promise<void> {
         return runDb((db) => db.runAsync('DELETE FROM inbox_items WHERE uid = ?', [uid]));

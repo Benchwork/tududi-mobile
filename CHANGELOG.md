@@ -4,6 +4,23 @@ All notable changes to Tududi Mobile are documented here. The project follows
 [Semantic Versioning](https://semver.org/); until 1.0 both features and
 breaking changes can land in minor/patch bumps.
 
+## [0.0.3-alpha] - 2026-07-14
+
+### Fixed
+- Sync with **Tududi server 1.2.4+**: push now uses server UIDs for
+  update/delete routes, maps task status and recurrence fields correctly, and
+  merges pulled rows by server id to avoid duplicates.
+- Pull requests all tasks via `type=all&status=all` (required by the 1.2 API).
+- Sync errors from push/pull now surface in **More → Sync**.
+
+### Added
+- Shared **Inbox quick-capture** bar on Inbox and Today screens.
+- **Inbox summary row** on Today (badge + tap to open inbox).
+- Cross-platform **TextPromptModal** for new/rename prompts on Android.
+
+### Changed
+- Android `versionCode` is now **3**.
+
 ## [0.0.1-alpha] - 2026-04-23
 
 First public alpha of the Tududi mobile client. Android-only for now.

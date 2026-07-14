@@ -1,49 +1,29 @@
-import React, { useMemo, useState } from 'react';
-import {
-    FlatList,
-    Keyboard,
-    Pressable,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-} from 'react-native';
+import React, { useMemo } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { format } from 'date-fns';
 import { Screen } from '@/components/Screen';
+import { Badge } from '@/components/Badge';
+import { Card } from '@/components/Card';
 import { OfflineBanner } from '@/components/OfflineBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/Button';
+import { InboxQuickCaptureBar } from '@/features/inbox/InboxQuickCaptureBar';
+import { useInbox } from '@/features/inbox/queries';
 import { TaskRow } from '@/features/tasks/TaskRow';
-import { useCreateTask, useTasks, useToggleTask } from '@/features/tasks/queries';
+import { useTasks, useToggleTask } from '@/features/tasks/queries';
 import { useSyncStore } from '@/sync/scheduler';
 import { useTheme } from '@/theme/theme';
 
 export default function TodayScreen() {
     const router = useRouter();
-    const { palette, radius } = useTheme();
+    const { palette } = useTheme();
     const today = useTasks({ filter: 'today', sort: 'due_date' });
     const overdue = useTasks({ filter: 'upcoming', sort: 'due_date' });
+    const { data: inboxItems = [] } = useInbox();
     const syncing = useSyncStore((s) => s.running);
     const runSync = useSyncStore((s) => s.run);
     const toggle = useToggleTask();
-    const create = useCreateTask();
-    const [quick, setQuick] = useState('');
-
-    const submitQuick = async () => {
-        const name = quick.trim();
-        if (!name) return;
-        setQuick('');
-        Keyboard.dismiss();
-        const todayIso = new Date();
-        todayIso.setHours(23, 59, 0, 0);
-        await create.mutateAsync({
-            name,
-            due_date: todayIso.toISOString(),
-            status: 'pending',
-        });
-    };
 
     const sections = useMemo(() => {
         const todayItems = today.data ?? [];
@@ -55,6 +35,35 @@ export default function TodayScreen() {
     }, [today.data, overdue.data]);
 
     const allEmpty = sections.todayItems.length === 0 && sections.overdueItems.length === 0;
+    const inboxCount = inboxItems.length;
+
+    const listHeader = (
+        <View style={{ marginBottom: 8 }}>
+            {inboxCount > 0 ? (
+                <Pressable
+                    onPress={() => router.push('/inbox')}
+                    style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1, marginBottom: 8 })}
+                >
+                    <Card style={{ marginBottom: 0, paddingVertical: 12 }}>
+                        <View style={styles.inboxRow}>
+                            <Text style={[styles.inboxTitle, { color: palette.text }]}>Inbox</Text>
+                            <View style={styles.inboxRight}>
+                                <Badge label={String(inboxCount)} variant="soft" />
+                                <Text style={[styles.inboxChevron, { color: palette.textFaint }]}>
+                                    ›
+                                </Text>
+                            </View>
+                        </View>
+                    </Card>
+                </Pressable>
+            ) : null}
+            {sections.overdueItems.length > 0 ? (
+                <Text style={[styles.sectionLabel, { color: palette.danger }]}>
+                    Overdue ({sections.overdueItems.length})
+                </Text>
+            ) : null}
+        </View>
+    );
 
     return (
         <Screen padded={false}>
@@ -65,43 +74,7 @@ export default function TodayScreen() {
                 </Text>
                 <Text style={[styles.title, { color: palette.text }]}>Today</Text>
             </View>
-            <View style={styles.quickCaptureWrap}>
-                <View
-                    style={[
-                        styles.quickCapture,
-                        {
-                            backgroundColor: palette.bgElevated,
-                            borderColor: palette.border,
-                            borderRadius: radius.md,
-                        },
-                    ]}
-                >
-                    <TextInput
-                        value={quick}
-                        onChangeText={setQuick}
-                        onSubmitEditing={submitQuick}
-                        placeholder="Add a task for today…"
-                        placeholderTextColor={palette.textFaint}
-                        returnKeyType="done"
-                        blurOnSubmit={false}
-                        style={[styles.quickInput, { color: palette.text }]}
-                    />
-                    <Pressable
-                        onPress={submitQuick}
-                        disabled={!quick.trim() || create.isPending}
-                        hitSlop={8}
-                        style={({ pressed }) => [
-                            styles.quickBtn,
-                            {
-                                backgroundColor: quick.trim() ? palette.primary : palette.bgMuted,
-                                opacity: pressed ? 0.8 : 1,
-                            },
-                        ]}
-                    >
-                        <Text style={styles.quickBtnText}>Add</Text>
-                    </Pressable>
-                </View>
-            </View>
+            <InboxQuickCaptureBar />
             <FlatList
                 data={[...sections.overdueItems, ...sections.todayItems]}
                 keyExtractor={(t) => t.uid ?? String(t.id)}
@@ -143,13 +116,7 @@ export default function TodayScreen() {
                         />
                     ) : null
                 }
-                ListHeaderComponent={
-                    sections.overdueItems.length > 0 ? (
-                        <Text style={[styles.sectionLabel, { color: palette.danger }]}>
-                            Overdue ({sections.overdueItems.length})
-                        </Text>
-                    ) : null
-                }
+                ListHeaderComponent={listHeader}
             />
         </Screen>
     );
@@ -161,24 +128,12 @@ const styles = StyleSheet.create({
     title: { fontSize: 32, fontWeight: '700' },
     listContent: { padding: 16, paddingBottom: 24 },
     sectionLabel: { fontSize: 12, fontWeight: '700', marginBottom: 8, letterSpacing: 0.5 },
-    quickCaptureWrap: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8 },
-    quickCapture: {
+    inboxRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
-        paddingLeft: 12,
-        paddingRight: 4,
+        justifyContent: 'space-between',
     },
-    quickInput: {
-        flex: 1,
-        fontSize: 15,
-        paddingVertical: 10,
-    },
-    quickBtn: {
-        marginLeft: 8,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 8,
-    },
-    quickBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+    inboxTitle: { fontSize: 16, fontWeight: '600' },
+    inboxRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    inboxChevron: { fontSize: 22, fontWeight: '300', marginTop: -2 },
 });

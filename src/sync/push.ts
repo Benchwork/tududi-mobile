@@ -1,3 +1,4 @@
+import { toServerTaskPayload } from '../api/taskMaps';
 import { endpoints } from '../api/endpoints';
 import { isApiError } from '../api/errors';
 import {
@@ -7,7 +8,8 @@ import {
     projectsRepo,
     tasksRepo,
 } from '../db/repositories';
-import { markFailure, markSuccess, pending, type OutboxEntry, type SyncEntity } from './outbox';
+import { markFailure, markSuccess, pending, retargetResourceUid, type OutboxEntry, type SyncEntity } from './outbox';
+import { resolveResourceKey } from './resourceKey';
 
 export interface PushResult {
     succeeded: number;
@@ -17,6 +19,11 @@ export interface PushResult {
 
 type ServerEntity = { id?: number; uid?: string };
 
+function normalizePayload(entity: SyncEntity, payload: Record<string, unknown>): Record<string, unknown> {
+    if (entity === 'tasks') return toServerTaskPayload(payload);
+    return payload;
+}
+
 async function applyServerResult(
     entity: SyncEntity,
     clientUid: string,
@@ -24,21 +31,54 @@ async function applyServerResult(
 ): Promise<void> {
     if (!server) return;
     const serverId = typeof server.id === 'number' ? server.id : undefined;
+    const serverUid = server.uid?.trim();
+    const shouldReplaceUid = !!(
+        serverUid &&
+        serverUid.length > 0 &&
+        serverUid !== clientUid &&
+        serverId
+    );
+
     switch (entity) {
         case 'tasks':
-            await tasksRepo.clearDirty(clientUid, serverId);
+            if (shouldReplaceUid) {
+                await tasksRepo.replaceUid(clientUid, serverUid!, serverId!);
+                await retargetResourceUid('tasks', clientUid, serverUid!);
+            } else {
+                await tasksRepo.clearDirty(clientUid, serverId, serverUid);
+            }
             break;
         case 'projects':
-            await projectsRepo.clearDirty(clientUid, serverId);
+            if (shouldReplaceUid) {
+                await projectsRepo.replaceUid(clientUid, serverUid!, serverId!);
+                await retargetResourceUid('projects', clientUid, serverUid!);
+            } else {
+                await projectsRepo.clearDirty(clientUid, serverId, serverUid);
+            }
             break;
         case 'areas':
-            await areasRepo.clearDirty(clientUid, serverId);
+            if (shouldReplaceUid) {
+                await areasRepo.replaceUid(clientUid, serverUid!, serverId!);
+                await retargetResourceUid('areas', clientUid, serverUid!);
+            } else {
+                await areasRepo.clearDirty(clientUid, serverId, serverUid);
+            }
             break;
         case 'notes':
-            await notesRepo.clearDirty(clientUid, serverId);
+            if (shouldReplaceUid) {
+                await notesRepo.replaceUid(clientUid, serverUid!, serverId!);
+                await retargetResourceUid('notes', clientUid, serverUid!);
+            } else {
+                await notesRepo.clearDirty(clientUid, serverId, serverUid);
+            }
             break;
         case 'inbox_items':
-            await inboxRepo.clearDirty(clientUid, serverId);
+            if (shouldReplaceUid) {
+                await inboxRepo.replaceUid(clientUid, serverUid!, serverId!);
+                await retargetResourceUid('inbox_items', clientUid, serverUid!);
+            } else {
+                await inboxRepo.clearDirty(clientUid, serverId, serverUid);
+            }
             break;
     }
 }
@@ -64,8 +104,13 @@ async function purgeAfterDelete(entity: SyncEntity, uid: string): Promise<void> 
 }
 
 async function executeEntry(entry: OutboxEntry): Promise<void> {
-    const payload = entry.payload ? (JSON.parse(entry.payload) as Record<string, unknown>) : {};
-    const resourceId = entry.resource_id;
+    const rawPayload = entry.payload ? (JSON.parse(entry.payload) as Record<string, unknown>) : {};
+    const payload = normalizePayload(entry.entity, rawPayload);
+    const apiKey = await resolveResourceKey(
+        entry.entity,
+        entry.resource_uid,
+        entry.resource_id
+    );
 
     switch (entry.entity) {
         case 'tasks': {
@@ -73,13 +118,10 @@ async function executeEntry(entry: OutboxEntry): Promise<void> {
                 const created = (await endpoints.tasks.create(payload)) as ServerEntity;
                 await applyServerResult('tasks', entry.resource_uid, created);
             } else if (entry.op === 'update') {
-                if (!resourceId) throw new Error('Missing server id for task update');
-                const updated = (await endpoints.tasks.update(resourceId, payload)) as ServerEntity;
+                const updated = (await endpoints.tasks.update(apiKey, payload)) as ServerEntity;
                 await applyServerResult('tasks', entry.resource_uid, updated);
             } else {
-                if (resourceId) {
-                    await endpoints.tasks.delete(resourceId);
-                }
+                await endpoints.tasks.delete(apiKey);
                 await purgeAfterDelete('tasks', entry.resource_uid);
             }
             return;
@@ -89,11 +131,10 @@ async function executeEntry(entry: OutboxEntry): Promise<void> {
                 const created = (await endpoints.projects.create(payload)) as ServerEntity;
                 await applyServerResult('projects', entry.resource_uid, created);
             } else if (entry.op === 'update') {
-                if (!resourceId) throw new Error('Missing server id for project update');
-                const updated = (await endpoints.projects.update(resourceId, payload)) as ServerEntity;
+                const updated = (await endpoints.projects.update(apiKey, payload)) as ServerEntity;
                 await applyServerResult('projects', entry.resource_uid, updated);
             } else {
-                if (resourceId) await endpoints.projects.delete(resourceId);
+                await endpoints.projects.delete(apiKey);
                 await purgeAfterDelete('projects', entry.resource_uid);
             }
             return;
@@ -103,11 +144,10 @@ async function executeEntry(entry: OutboxEntry): Promise<void> {
                 const created = (await endpoints.areas.create(payload)) as ServerEntity;
                 await applyServerResult('areas', entry.resource_uid, created);
             } else if (entry.op === 'update') {
-                if (!resourceId) throw new Error('Missing server id for area update');
-                const updated = (await endpoints.areas.update(resourceId, payload)) as ServerEntity;
+                const updated = (await endpoints.areas.update(apiKey, payload)) as ServerEntity;
                 await applyServerResult('areas', entry.resource_uid, updated);
             } else {
-                if (resourceId) await endpoints.areas.delete(resourceId);
+                await endpoints.areas.delete(apiKey);
                 await purgeAfterDelete('areas', entry.resource_uid);
             }
             return;
@@ -117,11 +157,10 @@ async function executeEntry(entry: OutboxEntry): Promise<void> {
                 const created = (await endpoints.notes.create(payload)) as ServerEntity;
                 await applyServerResult('notes', entry.resource_uid, created);
             } else if (entry.op === 'update') {
-                if (!resourceId) throw new Error('Missing server id for note update');
-                const updated = (await endpoints.notes.update(resourceId, payload)) as ServerEntity;
+                const updated = (await endpoints.notes.update(apiKey, payload)) as ServerEntity;
                 await applyServerResult('notes', entry.resource_uid, updated);
             } else {
-                if (resourceId) await endpoints.notes.delete(resourceId);
+                await endpoints.notes.delete(apiKey);
                 await purgeAfterDelete('notes', entry.resource_uid);
             }
             return;
@@ -132,11 +171,10 @@ async function executeEntry(entry: OutboxEntry): Promise<void> {
                 const created = (await endpoints.inbox.create(content)) as ServerEntity;
                 await applyServerResult('inbox_items', entry.resource_uid, created);
             } else if (entry.op === 'update') {
-                if (!resourceId) throw new Error('Missing server id for inbox update');
-                const updated = (await endpoints.inbox.update(resourceId, payload)) as ServerEntity;
+                const updated = (await endpoints.inbox.update(apiKey, payload)) as ServerEntity;
                 await applyServerResult('inbox_items', entry.resource_uid, updated);
             } else {
-                if (resourceId) await endpoints.inbox.delete(resourceId);
+                await endpoints.inbox.delete(apiKey);
                 await purgeAfterDelete('inbox_items', entry.resource_uid);
             }
             return;

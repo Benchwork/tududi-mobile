@@ -88,3 +88,17 @@ export async function entryByResource(
         )
     );
 }
+
+/** Keep pending outbox rows aligned when a local row's uid is replaced after create. */
+export async function retargetResourceUid(
+    entity: SyncEntity,
+    oldUid: string,
+    newUid: string
+): Promise<void> {
+    return runDb((db) =>
+        db.runAsync(
+            'UPDATE outbox SET resource_uid = ? WHERE entity = ? AND resource_uid = ?',
+            [newUid, entity, oldUid]
+        )
+    );
+}

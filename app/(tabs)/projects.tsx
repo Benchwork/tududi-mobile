@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import {
-    Alert,
     FlatList,
     Pressable,
     RefreshControl,
@@ -16,6 +15,7 @@ import { Button } from '@/components/Button';
 import { OfflineBanner } from '@/components/OfflineBanner';
 import { EmptyState } from '@/components/EmptyState';
 import { TextField } from '@/components/TextField';
+import { TextPromptModal } from '@/components/TextPromptModal';
 import { useProjects, useCreateProject } from '@/features/projects/queries';
 import { useAreas } from '@/features/areas/queries';
 import { useSyncStore } from '@/sync/scheduler';
@@ -40,6 +40,7 @@ export default function ProjectsScreen() {
     const syncing = useSyncStore((s) => s.running);
     const runSync = useSyncStore((s) => s.run);
     const create = useCreateProject();
+    const [newProjectOpen, setNewProjectOpen] = useState(false);
 
     const grouped = useMemo(() => {
         const q = search.trim().toLowerCase();
@@ -72,18 +73,6 @@ export default function ProjectsScreen() {
             ]),
         [grouped]
     );
-
-    const onNewProject = () => {
-        Alert.prompt?.(
-            'New project',
-            'Name your project',
-            async (name?: string) => {
-                if (!name || !name.trim()) return;
-                await create.mutateAsync({ name: name.trim() });
-                refetch();
-            }
-        );
-    };
 
     return (
         <Screen padded={false}>
@@ -169,8 +158,26 @@ export default function ProjectsScreen() {
                 }
             />
             <View style={styles.fabWrap}>
-                <Button title="+ New project" onPress={onNewProject} style={{ borderRadius: 999 }} />
+                <Button
+                    title="+ New project"
+                    onPress={() => setNewProjectOpen(true)}
+                    style={{ borderRadius: 999 }}
+                />
             </View>
+            <TextPromptModal
+                visible={newProjectOpen}
+                title="New project"
+                message="Name your project"
+                placeholder="Project name"
+                submitLabel="Create"
+                loading={create.isPending}
+                onCancel={() => setNewProjectOpen(false)}
+                onSubmit={async (name) => {
+                    await create.mutateAsync({ name });
+                    setNewProjectOpen(false);
+                    refetch();
+                }}
+            />
         </Screen>
     );
 }

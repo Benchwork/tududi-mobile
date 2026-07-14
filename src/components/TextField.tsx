@@ -8,12 +8,16 @@ export interface TextFieldProps extends TextInputProps {
     error?: string;
 }
 
-export function TextField({ label, hint, error, style, ...rest }: TextFieldProps) {
+export const TextField = React.forwardRef<TextInput, TextFieldProps>(function TextField(
+    { label, hint, error, style, ...rest },
+    ref
+) {
     const { palette, radius } = useTheme();
     return (
         <View style={styles.wrap}>
             {label ? <Text style={[styles.label, { color: palette.textMuted }]}>{label}</Text> : null}
             <TextInput
+                ref={ref}
                 placeholderTextColor={palette.textFaint}
                 {...rest}
                 style={[
@@ -34,7 +38,7 @@ export function TextField({ label, hint, error, style, ...rest }: TextFieldProps
             ) : null}
         </View>
     );
-}
+});
 
 const styles = StyleSheet.create({
     wrap: { marginBottom: 12, width: '100%' },

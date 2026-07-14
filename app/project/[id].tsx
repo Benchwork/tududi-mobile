@@ -6,6 +6,7 @@ import { Card } from '@/components/Card';
 import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
 import { TextField } from '@/components/TextField';
+import { TextPromptModal } from '@/components/TextPromptModal';
 import { TaskRow } from '@/features/tasks/TaskRow';
 import {
     useProject,
@@ -56,6 +57,8 @@ export default function ProjectDetailScreen() {
     const toggle = useToggleTask();
     const createTask = useCreateTask();
     const createNote = useCreateNote();
+    const [renameOpen, setRenameOpen] = useState(false);
+    const [addTaskOpen, setAddTaskOpen] = useState(false);
 
     const area = useMemo(
         () => (project?.area_id ? areas.find((a) => a.id === project.area_id) : null),
@@ -70,28 +73,6 @@ export default function ProjectDetailScreen() {
             </Screen>
         );
     }
-
-    const onRename = () => {
-        Alert.prompt?.('Rename project', 'New name', async (name?: string) => {
-            if (name?.trim()) {
-                await update.mutateAsync({
-                    uid: project.uid!,
-                    patch: { name: name.trim() },
-                });
-            }
-        });
-    };
-
-    const onAddTask = () => {
-        Alert.prompt?.('Add task', 'Name', async (name?: string) => {
-            if (name?.trim()) {
-                await createTask.mutateAsync({
-                    name: name.trim(),
-                    project_id: project.id,
-                });
-            }
-        });
-    };
 
     const onAddNote = async () => {
         const n = await createNote.mutateAsync({
@@ -124,7 +105,7 @@ export default function ProjectDetailScreen() {
                 keyExtractor={(t) => t.uid ?? String(t.id)}
                 ListHeaderComponent={
                     <View style={{ padding: 16, gap: 12 }}>
-                        <Pressable onPress={onRename}>
+                        <Pressable onPress={() => setRenameOpen(true)}>
                             <Text style={[styles.title, { color: palette.text }]}>{project.name}</Text>
                         </Pressable>
                         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -191,7 +172,7 @@ export default function ProjectDetailScreen() {
                             <Text style={[styles.section, { color: palette.textMuted }]}>
                                 TASKS ({tasks.length})
                             </Text>
-                            <Pressable onPress={onAddTask}>
+                            <Pressable onPress={() => setAddTaskOpen(true)}>
                                 <Text style={{ color: palette.primary, fontWeight: '600' }}>
                                     + Add
                                 </Text>
@@ -265,6 +246,35 @@ export default function ProjectDetailScreen() {
                         />
                     </View>
                 }
+            />
+            <TextPromptModal
+                visible={renameOpen}
+                title="Rename project"
+                message="New name"
+                defaultValue={project.name}
+                submitLabel="Save"
+                loading={update.isPending}
+                onCancel={() => setRenameOpen(false)}
+                onSubmit={async (name) => {
+                    await update.mutateAsync({ uid: project.uid!, patch: { name } });
+                    setRenameOpen(false);
+                }}
+            />
+            <TextPromptModal
+                visible={addTaskOpen}
+                title="Add task"
+                message="Name this task"
+                placeholder="Task name"
+                submitLabel="Add"
+                loading={createTask.isPending}
+                onCancel={() => setAddTaskOpen(false)}
+                onSubmit={async (name) => {
+                    await createTask.mutateAsync({
+                        name,
+                        project_id: project.id,
+                    });
+                    setAddTaskOpen(false);
+                }}
             />
         </Screen>
     );
