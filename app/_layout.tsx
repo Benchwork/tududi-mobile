@@ -3,9 +3,11 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { AppProviders } from '@/providers/AppProviders';
 import { useSessionStore } from '@/stores/session';
 import { useShareIntent } from '@/share/linking';
+import { useNotificationNavigation } from '@/notifications';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
     useShareIntent();
+    useNotificationNavigation();
     const session = useSessionStore((s) => s.session);
     const lastServerUrl = useSessionStore((s) => s.lastServerUrl);
     const hydrated = useSessionStore((s) => s.hydrated);

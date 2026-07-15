@@ -33,6 +33,14 @@ export async function pullAll(): Promise<PullResult> {
     const errors: string[] = [];
     const lastSync = (await metaRepo.get('last_sync_at')) ?? undefined;
 
+    await Promise.all([
+        tasksRepo.deduplicateByServerId(),
+        projectsRepo.deduplicateByServerId(),
+        areasRepo.deduplicateByServerId(),
+        notesRepo.deduplicateByServerId(),
+        inboxRepo.deduplicateByServerId(),
+    ]);
+
     const [tasks, projects, areas, notes, tags, inbox] = await Promise.all([
         runSafe(() => endpoints.tasks.list({ type: 'all', status: 'all', updated_since: lastSync }), errors, 'tasks'),
         runSafe(() => endpoints.projects.list({ updated_since: lastSync }), errors, 'projects'),

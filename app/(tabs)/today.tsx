@@ -19,19 +19,17 @@ export default function TodayScreen() {
     const router = useRouter();
     const { palette } = useTheme();
     const today = useTasks({ filter: 'today', sort: 'due_date' });
-    const overdue = useTasks({ filter: 'upcoming', sort: 'due_date' });
+    const overdue = useTasks({ filter: 'overdue', sort: 'due_date' });
     const { data: inboxItems = [] } = useInbox();
     const syncing = useSyncStore((s) => s.running);
     const runSync = useSyncStore((s) => s.run);
     const toggle = useToggleTask();
 
     const sections = useMemo(() => {
-        const todayItems = today.data ?? [];
-        const overdueItems = (overdue.data ?? []).filter((t) => {
-            if (!t.due_date) return false;
-            return new Date(t.due_date).getTime() < Date.now();
-        });
-        return { todayItems, overdueItems };
+        return {
+            todayItems: today.data ?? [],
+            overdueItems: overdue.data ?? [],
+        };
     }, [today.data, overdue.data]);
 
     const allEmpty = sections.todayItems.length === 0 && sections.overdueItems.length === 0;

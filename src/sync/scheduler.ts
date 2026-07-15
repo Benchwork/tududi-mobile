@@ -6,6 +6,7 @@ import { useSessionStore } from '../stores/session';
 import { drainOutbox, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
 import { countPending } from './outbox';
+import { queueRescheduleTaskNotifications } from '../notifications';
 
 const BG_TASK = 'tududi-sync-bg';
 
@@ -73,6 +74,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
                 pendingOps,
                 error,
             });
+            queueRescheduleTaskNotifications();
         }
     },
 }));

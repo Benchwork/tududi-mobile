@@ -97,26 +97,28 @@ export async function getCsrfToken(
     cookie: string
 ): Promise<string | undefined> {
     const base = normalizeBase(serverUrl);
-    try {
-        const res = await fetch(`${base}/api/csrf-token`, {
-            headers: {
-                Accept: 'application/json',
-                Cookie: cookie,
-            },
-            credentials: 'include',
-        });
-        if (!res.ok) return undefined;
-        const data = (await res.json()) as { csrfToken?: string };
-        return data.csrfToken;
-    } catch {
-        return undefined;
+    for (const path of ['/api/csrf-token', '/api/v1/csrf-token']) {
+        try {
+            const res = await fetch(`${base}${path}`, {
+                headers: {
+                    Accept: 'application/json',
+                    Cookie: cookie,
+                },
+                credentials: 'include',
+            });
+            if (!res.ok) continue;
+            const data = (await res.json()) as { csrfToken?: string };
+            if (data.csrfToken) return data.csrfToken;
+        } catch {
+            // try next path
+        }
     }
+    return undefined;
 }
 
 /**
- * Verify an API key by hitting an authenticated endpoint. Bearer auth bypasses
- * CSRF on the server (see the `req.headers.authorization?.startsWith('Bearer ')`
- * check in backend/app.js), so we can hit the versioned path safely.
+ * Verify an API key by hitting an authenticated endpoint. Bearer auth does not
+ * send session cookies, so Tududi's session CSRF middleware is not applied.
  */
 export async function verifyApiKey(serverUrl: string, token: string): Promise<void> {
     const base = normalizeBase(serverUrl);
@@ -154,26 +156,31 @@ export async function tryCreateApiKey(
 ): Promise<string | null> {
     if (!csrfToken) return null;
     const base = normalizeBase(serverUrl);
-    try {
-        const res = await fetch(`${base}/api/profile/api-keys`, {
-            method: 'POST',
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                Cookie: cookie,
-                'X-CSRF-Token': csrfToken,
-            },
-            credentials: 'include',
-            body: JSON.stringify({ name }),
-        });
-        if (!res.ok) return null;
-        const data = (await res.json()) as {
-            key?: string;
-            token?: string;
-            api_key?: { token?: string; key?: string };
-        };
-        return data.key ?? data.token ?? data.api_key?.token ?? data.api_key?.key ?? null;
-    } catch {
-        return null;
+    for (const path of ['/api/profile/api-keys', '/api/v1/profile/api-keys']) {
+        try {
+            const res = await fetch(`${base}${path}`, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    Cookie: cookie,
+                    'X-CSRF-Token': csrfToken,
+                },
+                credentials: 'include',
+                body: JSON.stringify({ name }),
+            });
+            if (!res.ok) continue;
+            const data = (await res.json()) as {
+                key?: string;
+                token?: string;
+                api_key?: { token?: string; key?: string };
+            };
+            const apiToken =
+                data.token ?? data.key ?? data.api_key?.token ?? data.api_key?.key ?? null;
+            if (apiToken) return apiToken;
+        } catch {
+            // try next path
+        }
     }
+    return null;
 }

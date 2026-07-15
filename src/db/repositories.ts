@@ -1,6 +1,12 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { runDb, withDb } from './database';
 import { newClientUid } from './uid';
+import {
+    deduplicateByServerIdForTable,
+    deduplicateByServerIdInDb,
+    dropConflictingUidRowInDb,
+    reconcileLocalToServerUid,
+} from './uidReconcile';
 import { toLocalTaskStatus } from '../api/taskMaps';
 import type {
     Area,
@@ -12,6 +18,7 @@ import type {
     TaskFilter,
     TaskSort,
 } from '../types/tududi';
+import { localTodayDate } from '../utils/dates';
 
 function now(): number {
     return Date.now();
@@ -25,14 +32,6 @@ function boolToInt(v: boolean | null | undefined): number | null {
 function intToBool(v: number | null | undefined): boolean | undefined {
     if (v === null || v === undefined) return undefined;
     return !!v;
-}
-
-function todayBounds(): { start: string; end: string } {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    return { start: start.toISOString(), end: end.toISOString() };
 }
 
 interface TaskRow {
@@ -93,28 +92,40 @@ export interface TaskQuery {
 }
 
 export const tasksRepo = {
+    async deduplicateByServerId(): Promise<void> {
+        return deduplicateByServerIdForTable('tasks');
+    },
     async list(q: TaskQuery = {}): Promise<Task[]> {
+        await tasksRepo.deduplicateByServerId();
         return withDb(async (db) => {
             const where: string[] = ['_deleted = 0'];
             const args: Array<string | number | null> = [];
             const sort = q.sort ?? 'due_date';
             const dir = (q.dir ?? 'asc').toUpperCase();
 
+            const dueDaySql = `substr(due_date, 1, 10)`;
+            const activeTask = `(status IS NULL OR (status != 'completed' AND status != 'archived'))`;
+
             switch (q.filter) {
                 case 'today': {
-                    const { start, end } = todayBounds();
                     where.push(
-                        `(status IS NULL OR status != 'completed') AND (due_date IS NOT NULL AND due_date >= ? AND due_date <= ?)`
+                        `${activeTask} AND due_date IS NOT NULL AND ${dueDaySql} = ?`
                     );
-                    args.push(start, end);
+                    args.push(localTodayDate());
+                    break;
+                }
+                case 'overdue': {
+                    where.push(
+                        `${activeTask} AND due_date IS NOT NULL AND ${dueDaySql} < ?`
+                    );
+                    args.push(localTodayDate());
                     break;
                 }
                 case 'upcoming': {
-                    const { end } = todayBounds();
                     where.push(
-                        `(status IS NULL OR status != 'completed') AND (due_date IS NOT NULL AND due_date > ?)`
+                        `${activeTask} AND due_date IS NOT NULL AND ${dueDaySql} > ?`
                     );
-                    args.push(end);
+                    args.push(localTodayDate());
                     break;
                 }
                 case 'someday':
@@ -192,13 +203,31 @@ export const tasksRepo = {
         }
         const serverUid = (task.uid && task.uid.trim()) || `srv_${task.id}`;
         return withDb(async (db) => {
-            const existing = await db.getFirstAsync<TaskRow>(
-                'SELECT * FROM tasks WHERE id = ?',
+            await deduplicateByServerIdInDb(db, 'tasks');
+
+            type TaskRowWithRowid = TaskRow & { rowid: number };
+            let existing = await db.getFirstAsync<TaskRowWithRowid>(
+                'SELECT rowid, * FROM tasks WHERE id = ? LIMIT 1',
                 [task.id]
             );
+            if (!existing) {
+                existing = await db.getFirstAsync<TaskRowWithRowid>(
+                    'SELECT rowid, * FROM tasks WHERE uid = ? LIMIT 1',
+                    [serverUid]
+                );
+            }
+
             if (existing) {
                 if (existing._dirty === 1) {
                     return;
+                }
+                if (existing.uid !== serverUid) {
+                    await dropConflictingUidRowInDb(
+                        db,
+                        'tasks',
+                        serverUid,
+                        existing.rowid
+                    );
                 }
                 await db.runAsync(
                     `UPDATE tasks SET
@@ -207,7 +236,7 @@ export const tasksRepo = {
                         recurring_interval = ?, recurring_end_date = ?, recurring_weekday = ?,
                         recurring_week_of_month = ?, recurrence_completion_based = ?,
                         completed_at = ?, created_at = ?, updated_at = ?
-                     WHERE id = ? AND _dirty = 0`,
+                     WHERE rowid = ? AND _dirty = 0`,
                     [
                         serverUid,
                         task.name,
@@ -226,11 +255,20 @@ export const tasksRepo = {
                         task.completed_at ?? null,
                         task.created_at ?? null,
                         task.updated_at ?? null,
-                        task.id,
+                        existing.rowid,
                     ]
                 );
                 return;
             }
+
+            const staleUidRow = await db.getFirstAsync<{ rowid: number; _dirty: number }>(
+                'SELECT rowid, _dirty FROM tasks WHERE uid = ?',
+                [serverUid]
+            );
+            if (staleUidRow && staleUidRow._dirty === 0) {
+                await db.runAsync('DELETE FROM tasks WHERE rowid = ?', [staleUidRow.rowid]);
+            }
+
             await db.runAsync(
                 `INSERT INTO tasks (
                     id, uid, name, note, status, priority, due_date, project_id,
@@ -427,23 +465,13 @@ export const tasksRepo = {
     },
 
     async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
-        return runDb((db) =>
-            db.runAsync(
-                'UPDATE tasks SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
-                [serverUid, serverId, oldUid]
-            )
-        );
+        return reconcileLocalToServerUid('tasks', oldUid, serverUid, serverId);
     },
 
     async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
         const s = serverUid?.trim();
-        if (s && s.length > 0 && s !== uid) {
-            return runDb((db) =>
-                db.runAsync(
-                    'UPDATE tasks SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
-                    [serverId ?? null, s, uid]
-                )
-            );
+        if (s && s.length > 0 && s !== uid && serverId) {
+            return reconcileLocalToServerUid('tasks', uid, s, serverId);
         }
         return runDb((db) =>
             db.runAsync(
@@ -489,7 +517,11 @@ function rowToProject(row: ProjectRow): Project {
 }
 
 export const projectsRepo = {
+    async deduplicateByServerId(): Promise<void> {
+        return deduplicateByServerIdForTable('projects');
+    },
     async list(): Promise<Project[]> {
+        await projectsRepo.deduplicateByServerId();
         return withDb(async (db) => {
             const rows = await db.getAllAsync<ProjectRow>(
                 'SELECT * FROM projects WHERE _deleted = 0 ORDER BY name COLLATE NOCASE ASC'
@@ -535,19 +567,37 @@ export const projectsRepo = {
         }
         const serverUid = (p.uid && p.uid.trim()) || `srv_${p.id}`;
         return withDb(async (db) => {
-            const existing = await db.getFirstAsync<ProjectRow>(
-                'SELECT * FROM projects WHERE id = ?',
+            await deduplicateByServerIdInDb(db, 'projects');
+
+            type ProjectRowWithRowid = ProjectRow & { rowid: number };
+            let existing = await db.getFirstAsync<ProjectRowWithRowid>(
+                'SELECT rowid, * FROM projects WHERE id = ? LIMIT 1',
                 [p.id]
             );
+            if (!existing) {
+                existing = await db.getFirstAsync<ProjectRowWithRowid>(
+                    'SELECT rowid, * FROM projects WHERE uid = ? LIMIT 1',
+                    [serverUid]
+                );
+            }
+
             if (existing) {
                 if (existing._dirty === 1) {
                     return;
+                }
+                if (existing.uid !== serverUid) {
+                    await dropConflictingUidRowInDb(
+                        db,
+                        'projects',
+                        serverUid,
+                        existing.rowid
+                    );
                 }
                 await db.runAsync(
                     `UPDATE projects SET
                         uid = ?, name = ?, description = ?, status = ?, priority = ?,
                         area_id = ?, active = ?, pin_to_sidebar = ?, created_at = ?, updated_at = ?
-                     WHERE id = ? AND _dirty = 0`,
+                     WHERE rowid = ? AND _dirty = 0`,
                     [
                         serverUid,
                         p.name,
@@ -559,11 +609,20 @@ export const projectsRepo = {
                         boolToInt(p.pin_to_sidebar ?? null),
                         p.created_at ?? null,
                         p.updated_at ?? null,
-                        p.id,
+                        existing.rowid,
                     ]
                 );
                 return;
             }
+
+            const staleUidRow = await db.getFirstAsync<{ rowid: number; _dirty: number }>(
+                'SELECT rowid, _dirty FROM projects WHERE uid = ?',
+                [serverUid]
+            );
+            if (staleUidRow && staleUidRow._dirty === 0) {
+                await db.runAsync('DELETE FROM projects WHERE rowid = ?', [staleUidRow.rowid]);
+            }
+
             await db.runAsync(
                 `INSERT INTO projects (
                     id, uid, name, description, status, priority, area_id, active,
@@ -688,22 +747,12 @@ export const projectsRepo = {
         return runDb((db) => db.runAsync('DELETE FROM projects WHERE uid = ?', [uid]));
     },
     async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
-        return runDb((db) =>
-            db.runAsync(
-                'UPDATE projects SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
-                [serverUid, serverId, oldUid]
-            )
-        );
+        return reconcileLocalToServerUid('projects', oldUid, serverUid, serverId);
     },
     async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
         const s = serverUid?.trim();
-        if (s && s.length > 0 && s !== uid) {
-            return runDb((db) =>
-                db.runAsync(
-                    'UPDATE projects SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
-                    [serverId ?? null, s, uid]
-                )
-            );
+        if (s && s.length > 0 && s !== uid && serverId) {
+            return reconcileLocalToServerUid('projects', uid, s, serverId);
         }
         return runDb((db) =>
             db.runAsync(
@@ -728,7 +777,11 @@ interface AreaRow {
 }
 
 export const areasRepo = {
+    async deduplicateByServerId(): Promise<void> {
+        return deduplicateByServerIdForTable('areas');
+    },
     async list(): Promise<Area[]> {
+        await areasRepo.deduplicateByServerId();
         return withDb(async (db) => {
             const rows = await db.getAllAsync<AreaRow>(
                 'SELECT * FROM areas WHERE _deleted = 0 ORDER BY name COLLATE NOCASE ASC'
@@ -783,28 +836,55 @@ export const areasRepo = {
         }
         const serverUid = (a.uid && a.uid.trim()) || `srv_${a.id}`;
         return withDb(async (db) => {
-            const existing = await db.getFirstAsync<AreaRow>(
-                'SELECT * FROM areas WHERE id = ?',
+            await deduplicateByServerIdInDb(db, 'areas');
+
+            type AreaRowWithRowid = AreaRow & { rowid: number };
+            let existing = await db.getFirstAsync<AreaRowWithRowid>(
+                'SELECT rowid, * FROM areas WHERE id = ? LIMIT 1',
                 [a.id]
             );
+            if (!existing) {
+                existing = await db.getFirstAsync<AreaRowWithRowid>(
+                    'SELECT rowid, * FROM areas WHERE uid = ? LIMIT 1',
+                    [serverUid]
+                );
+            }
+
             if (existing) {
                 if (existing._dirty === 1) {
                     return;
                 }
+                if (existing.uid !== serverUid) {
+                    await dropConflictingUidRowInDb(
+                        db,
+                        'areas',
+                        serverUid,
+                        existing.rowid
+                    );
+                }
                 await db.runAsync(
                     `UPDATE areas SET uid = ?, name = ?, description = ?, created_at = ?, updated_at = ?
-                     WHERE id = ? AND _dirty = 0`,
+                     WHERE rowid = ? AND _dirty = 0`,
                     [
                         serverUid,
                         a.name,
                         a.description ?? null,
                         a.created_at ?? null,
                         a.updated_at ?? null,
-                        a.id,
+                        existing.rowid,
                     ]
                 );
                 return;
             }
+
+            const staleUidRow = await db.getFirstAsync<{ rowid: number; _dirty: number }>(
+                'SELECT rowid, _dirty FROM areas WHERE uid = ?',
+                [serverUid]
+            );
+            if (staleUidRow && staleUidRow._dirty === 0) {
+                await db.runAsync('DELETE FROM areas WHERE rowid = ?', [staleUidRow.rowid]);
+            }
+
             await db.runAsync(
                 `INSERT INTO areas (id, uid, name, description, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,0,0,0,NULL)
@@ -883,13 +963,8 @@ export const areasRepo = {
     },
     async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
         const s = serverUid?.trim();
-        if (s && s.length > 0 && s !== uid) {
-            return runDb((db) =>
-                db.runAsync(
-                    'UPDATE areas SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
-                    [serverId ?? null, s, uid]
-                )
-            );
+        if (s && s.length > 0 && s !== uid && serverId) {
+            return reconcileLocalToServerUid('areas', uid, s, serverId);
         }
         return runDb((db) =>
             db.runAsync(
@@ -902,12 +977,7 @@ export const areasRepo = {
         return runDb((db) => db.runAsync('DELETE FROM areas WHERE uid = ?', [uid]));
     },
     async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
-        return runDb((db) =>
-            db.runAsync(
-                'UPDATE areas SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
-                [serverUid, serverId, oldUid]
-            )
-        );
+        return reconcileLocalToServerUid('areas', oldUid, serverUid, serverId);
     },
 };
 
@@ -927,7 +997,11 @@ interface NoteRow {
 }
 
 export const notesRepo = {
+    async deduplicateByServerId(): Promise<void> {
+        return deduplicateByServerIdForTable('notes');
+    },
     async list(): Promise<Note[]> {
+        await notesRepo.deduplicateByServerId();
         return withDb(async (db) => {
             const rows = await db.getAllAsync<NoteRow>(
                 'SELECT * FROM notes WHERE _deleted = 0 ORDER BY updated_at DESC'
@@ -1008,17 +1082,35 @@ export const notesRepo = {
         }
         const serverUid = (n.uid && n.uid.trim()) || `srv_${n.id}`;
         return withDb(async (db) => {
-            const existing = await db.getFirstAsync<NoteRow>(
-                'SELECT * FROM notes WHERE id = ?',
+            await deduplicateByServerIdInDb(db, 'notes');
+
+            type NoteRowWithRowid = NoteRow & { rowid: number };
+            let existing = await db.getFirstAsync<NoteRowWithRowid>(
+                'SELECT rowid, * FROM notes WHERE id = ? LIMIT 1',
                 [n.id]
             );
+            if (!existing) {
+                existing = await db.getFirstAsync<NoteRowWithRowid>(
+                    'SELECT rowid, * FROM notes WHERE uid = ? LIMIT 1',
+                    [serverUid]
+                );
+            }
+
             if (existing) {
                 if (existing._dirty === 1) {
                     return;
                 }
+                if (existing.uid !== serverUid) {
+                    await dropConflictingUidRowInDb(
+                        db,
+                        'notes',
+                        serverUid,
+                        existing.rowid
+                    );
+                }
                 await db.runAsync(
                     `UPDATE notes SET uid = ?, title = ?, content = ?, color = ?, project_id = ?, created_at = ?, updated_at = ?
-                     WHERE id = ? AND _dirty = 0`,
+                     WHERE rowid = ? AND _dirty = 0`,
                     [
                         serverUid,
                         n.title ?? null,
@@ -1027,11 +1119,20 @@ export const notesRepo = {
                         n.project_id ?? null,
                         n.created_at ?? null,
                         n.updated_at ?? null,
-                        n.id,
+                        existing.rowid,
                     ]
                 );
                 return;
             }
+
+            const staleUidRow = await db.getFirstAsync<{ rowid: number; _dirty: number }>(
+                'SELECT rowid, _dirty FROM notes WHERE uid = ?',
+                [serverUid]
+            );
+            if (staleUidRow && staleUidRow._dirty === 0) {
+                await db.runAsync('DELETE FROM notes WHERE rowid = ?', [staleUidRow.rowid]);
+            }
+
             await db.runAsync(
                 `INSERT INTO notes (id, uid, title, content, color, project_id, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,?,?,0,0,0,NULL)
@@ -1126,13 +1227,8 @@ export const notesRepo = {
     },
     async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
         const s = serverUid?.trim();
-        if (s && s.length > 0 && s !== uid) {
-            return runDb((db) =>
-                db.runAsync(
-                    'UPDATE notes SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
-                    [serverId ?? null, s, uid]
-                )
-            );
+        if (s && s.length > 0 && s !== uid && serverId) {
+            return reconcileLocalToServerUid('notes', uid, s, serverId);
         }
         return runDb((db) =>
             db.runAsync(
@@ -1145,12 +1241,7 @@ export const notesRepo = {
         return runDb((db) => db.runAsync('DELETE FROM notes WHERE uid = ?', [uid]));
     },
     async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
-        return runDb((db) =>
-            db.runAsync(
-                'UPDATE notes SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
-                [serverUid, serverId, oldUid]
-            )
-        );
+        return reconcileLocalToServerUid('notes', oldUid, serverUid, serverId);
     },
 };
 
@@ -1275,17 +1366,35 @@ export const inboxRepo = {
         }
         const serverUid = (i.uid && i.uid.trim()) || `srv_${i.id}`;
         return withDb(async (db) => {
-            const existing = await db.getFirstAsync<InboxRow>(
-                'SELECT * FROM inbox_items WHERE id = ?',
+            await deduplicateByServerIdInDb(db, 'inbox_items');
+
+            type InboxRowWithRowid = InboxRow & { rowid: number };
+            let existing = await db.getFirstAsync<InboxRowWithRowid>(
+                'SELECT rowid, * FROM inbox_items WHERE id = ? LIMIT 1',
                 [i.id]
             );
+            if (!existing) {
+                existing = await db.getFirstAsync<InboxRowWithRowid>(
+                    'SELECT rowid, * FROM inbox_items WHERE uid = ? LIMIT 1',
+                    [serverUid]
+                );
+            }
+
             if (existing) {
                 if (existing._dirty === 1) {
                     return;
                 }
+                if (existing.uid !== serverUid) {
+                    await dropConflictingUidRowInDb(
+                        db,
+                        'inbox_items',
+                        serverUid,
+                        existing.rowid
+                    );
+                }
                 await db.runAsync(
                     `UPDATE inbox_items SET uid = ?, content = ?, status = ?, source = ?, created_at = ?, updated_at = ?
-                     WHERE id = ? AND _dirty = 0`,
+                     WHERE rowid = ? AND _dirty = 0`,
                     [
                         serverUid,
                         i.content,
@@ -1293,11 +1402,20 @@ export const inboxRepo = {
                         i.source ?? null,
                         i.created_at ?? null,
                         i.updated_at ?? null,
-                        i.id,
+                        existing.rowid,
                     ]
                 );
                 return;
             }
+
+            const staleUidRow = await db.getFirstAsync<{ rowid: number; _dirty: number }>(
+                'SELECT rowid, _dirty FROM inbox_items WHERE uid = ?',
+                [serverUid]
+            );
+            if (staleUidRow && staleUidRow._dirty === 0) {
+                await db.runAsync('DELETE FROM inbox_items WHERE rowid = ?', [staleUidRow.rowid]);
+            }
+
             await db.runAsync(
                 `INSERT INTO inbox_items (id, uid, content, status, source, created_at, updated_at, _dirty, _deleted, _local_updated_at, _pending_op)
                  VALUES (?,?,?,?,?,?,?,0,0,0,NULL)
@@ -1364,12 +1482,7 @@ export const inboxRepo = {
         });
     },
     async replaceUid(oldUid: string, serverUid: string, serverId: number): Promise<void> {
-        return runDb((db) =>
-            db.runAsync(
-                'UPDATE inbox_items SET uid = ?, id = ?, _dirty = 0, _pending_op = NULL WHERE uid = ?',
-                [serverUid, serverId, oldUid]
-            )
-        );
+        return reconcileLocalToServerUid('inbox_items', oldUid, serverUid, serverId);
     },
     /**
      * After a successful push, optionally set `uid` to the server's canonical value so the
@@ -1377,13 +1490,8 @@ export const inboxRepo = {
      */
     async clearDirty(uid: string, serverId?: number, serverUid?: string | null): Promise<void> {
         const s = serverUid?.trim();
-        if (s && s.length > 0 && s !== uid) {
-            return runDb((db) =>
-                db.runAsync(
-                    'UPDATE inbox_items SET _dirty = 0, _pending_op = NULL, id = COALESCE(?, id), uid = ? WHERE uid = ?',
-                    [serverId ?? null, s, uid]
-                )
-            );
+        if (s && s.length > 0 && s !== uid && serverId) {
+            return reconcileLocalToServerUid('inbox_items', uid, s, serverId);
         }
         return runDb((db) =>
             db.runAsync(
@@ -1398,27 +1506,7 @@ export const inboxRepo = {
      * per `id` (prefers the one that still has pending local changes, then the lowest rowid).
      */
     async deduplicateByServerId(): Promise<void> {
-        return withDb(async (db) => {
-            const groups = await db.getAllAsync<{ id: number }>(
-                `SELECT id FROM inbox_items
-                 WHERE _deleted = 0 AND id IS NOT NULL AND id > 0
-                 GROUP BY id
-                 HAVING COUNT(*) > 1`
-            );
-            for (const { id } of groups) {
-                const rows = await db.getAllAsync<{ rowid: number; _dirty: number }>(
-                    `SELECT rowid, _dirty FROM inbox_items
-                     WHERE id = ? AND _deleted = 0
-                     ORDER BY _dirty DESC, rowid ASC`,
-                    [id]
-                );
-                if (rows.length < 2) continue;
-                const [, ...dups] = rows;
-                for (const r of dups) {
-                    await db.runAsync('DELETE FROM inbox_items WHERE rowid = ?', [r.rowid]);
-                }
-            }
-        });
+        return deduplicateByServerIdForTable('inbox_items');
     },
     async purge(uid: string): Promise<void> {
         return runDb((db) => db.runAsync('DELETE FROM inbox_items WHERE uid = ?', [uid]));

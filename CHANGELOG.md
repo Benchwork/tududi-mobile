@@ -4,6 +4,28 @@ All notable changes to Tududi Mobile are documented here. The project follows
 [Semantic Versioning](https://semver.org/); until 1.0 both features and
 breaking changes can land in minor/patch bumps.
 
+## [0.0.8] - 2026-07-15
+
+### Added
+- **Local task reminders** via `expo-notifications`: enable under **More →
+  Notifications**, set a default reminder time, and get alerts for due/overdue
+  tasks. Tapping a notification opens the task.
+- **Mark complete** control on the task detail screen.
+
+### Fixed
+- **Sync with Tududi 1.2.4+ (session login)**: refresh CSRF before writes and
+  auto-create a bearer API key after password login to avoid `CSRF token missing`
+  500 errors on task/inbox push.
+- **Task push/pull**: server UID reconciliation, progressive create fallback,
+  correct inbox process endpoint, and date/status field mapping for Tududi 1.2.
+- **Today screen** now shows overdue and due-today tasks correctly (date-only
+  due dates from the server were excluded by the old filter).
+- **Task detail screen**: subtask add button no longer clipped off-screen; form
+  and subtasks share one scroll view.
+
+### Changed
+- Android `versionCode` is now **8**.
+
 ## [0.0.3-alpha] - 2026-07-14
 
 ### Fixed

@@ -28,13 +28,17 @@ export type UnauthorizedHandler = () => void | Promise<void>;
 
 let sessionProvider: SessionProvider = () => null;
 let onUnauthorized: UnauthorizedHandler = () => {};
+let refreshSessionCsrf: () => Promise<SessionState | null> = async () => sessionProvider();
 
 export function configureApi(opts: {
     getSession: SessionProvider;
     onUnauthorized?: UnauthorizedHandler;
+    /** Refresh cookie-session CSRF before state-changing API calls. */
+    refreshSessionCsrf?: () => Promise<SessionState | null>;
 }): void {
     sessionProvider = opts.getSession;
     if (opts.onUnauthorized) onUnauthorized = opts.onUnauthorized;
+    if (opts.refreshSessionCsrf) refreshSessionCsrf = opts.refreshSessionCsrf;
 }
 
 function normalizeBaseUrl(url: string): string {
@@ -54,6 +58,34 @@ function buildUrl(baseUrl: string, path: string, query?: RequestOptions['query']
     return url.toString();
 }
 
+function extractApiMessage(parsed: unknown, status: number, statusText: string): string {
+    if (parsed && typeof parsed === 'object') {
+        const body = parsed as Record<string, unknown>;
+        const parts: string[] = [];
+        if (typeof body.message === 'string' && body.message.trim()) {
+            parts.push(body.message.trim());
+        }
+        if (typeof body.error === 'string' && body.error.trim()) {
+            parts.push(body.error.trim());
+        }
+        if (Array.isArray(body.details)) {
+            const details = body.details
+                .map((d) => (typeof d === 'string' ? d : JSON.stringify(d)))
+                .join('; ');
+            if (details) parts.push(details);
+        } else if (typeof body.details === 'string' && body.details.trim()) {
+            parts.push(body.details.trim());
+        }
+        if (parts.length > 0) {
+            return parts.join(' — ');
+        }
+    }
+    if (typeof parsed === 'string' && parsed.trim()) {
+        return parsed.trim();
+    }
+    return statusText || `Request failed (${status})`;
+}
+
 async function parseBody(res: Response, expectJson: boolean): Promise<unknown> {
     if (res.status === 204) return null;
     const contentType = res.headers.get('content-type') ?? '';
@@ -63,11 +95,35 @@ async function parseBody(res: Response, expectJson: boolean): Promise<unknown> {
     return res.text();
 }
 
+function applyAuthHeaders(
+    headers: Record<string, string>,
+    session: SessionState,
+    stateful: boolean
+): void {
+    if (session.authMode === 'bearer' && session.token) {
+        headers.Authorization = `Bearer ${session.token}`;
+        return;
+    }
+    if (session.authMode === 'session') {
+        if (session.cookie) headers.Cookie = session.cookie;
+        if (stateful) {
+            if (!session.csrfToken) {
+                throw new ApiError(
+                    'CSRF token missing for session auth. Sign in again or use a personal API key.',
+                    401,
+                    'csrf_missing'
+                );
+            }
+            headers['X-CSRF-Token'] = session.csrfToken;
+        }
+    }
+}
+
 export async function request<T = unknown>(
     path: string,
     opts: RequestOptions = {}
 ): Promise<T> {
-    const session = sessionProvider();
+    let session = sessionProvider();
     if (!session && !opts.public) {
         throw new ApiError('Not authenticated', 401, 'no_session');
     }
@@ -82,21 +138,18 @@ export async function request<T = unknown>(
     const url = buildUrl(serverUrl, fullPath, opts.query);
 
     const method = opts.method ?? 'GET';
+    const stateful = method !== 'GET';
+    if (!opts.public && session?.authMode === 'session' && stateful) {
+        session = (await refreshSessionCsrf()) ?? session;
+    }
+
     const headers: Record<string, string> = {
         Accept: 'application/json',
         ...opts.headers,
     };
 
     if (!opts.public && session) {
-        if (session.authMode === 'bearer' && session.token) {
-            headers.Authorization = `Bearer ${session.token}`;
-        } else if (session.authMode === 'session') {
-            if (session.cookie) headers.Cookie = session.cookie;
-            const stateful = method !== 'GET';
-            if (stateful && session.csrfToken) {
-                headers['X-CSRF-Token'] = session.csrfToken;
-            }
-        }
+        applyAuthHeaders(headers, session, stateful);
     }
 
     let body: BodyInit | undefined;
@@ -127,14 +180,7 @@ export async function request<T = unknown>(
         } catch {
             parsed = null;
         }
-        const message =
-            (typeof parsed === 'object' &&
-                parsed &&
-                'message' in parsed &&
-                typeof (parsed as { message: unknown }).message === 'string' &&
-                (parsed as { message: string }).message) ||
-            res.statusText ||
-            `Request failed (${res.status})`;
+        const message = extractApiMessage(parsed, res.status, res.statusText);
         const apiErr = new ApiError(message, res.status, undefined, parsed);
         if (apiErr.isUnauthorized) {
             try {

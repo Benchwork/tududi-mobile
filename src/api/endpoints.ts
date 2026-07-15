@@ -128,7 +128,8 @@ export const inbox = {
     update: (id: number | string, input: Partial<InboxItem>) =>
         api.patch<InboxItem>(`/inbox/${id}`, input),
     delete: (id: number | string) => api.delete<void>(`/inbox/${id}`),
-    process: (id: number | string, as: 'task' | 'note' | 'project', payload?: unknown) =>
+    markProcessed: (id: number | string) => api.patch<InboxItem>(`/inbox/${id}/process`, {}),
+    convert: (id: number | string, as: 'task' | 'note' | 'project', payload?: unknown) =>
         api.post<unknown>(`/inbox/${id}/process`, { as, payload }),
 };
 

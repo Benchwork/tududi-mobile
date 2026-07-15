@@ -43,7 +43,15 @@ export default function LoginScreen() {
 
             if (!token && cookie) {
                 csrf = await getCsrfToken(serverUrl, cookie);
-                token = await tryCreateApiKey(serverUrl, cookie, csrf, 'Tududi Mobile');
+                if (csrf) {
+                    token = await tryCreateApiKey(serverUrl, cookie, csrf, 'Tududi Mobile');
+                }
+            }
+
+            if (!token && cookie && !csrf) {
+                throw new Error(
+                    'Could not obtain a CSRF token for sync. Generate an API key in Tududi Settings → API Keys and use "Use an API key" instead.'
+                );
             }
 
             await setSession({

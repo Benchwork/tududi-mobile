@@ -142,7 +142,7 @@ export const HealthResponseSchema = z.object({
 
 export type ApiEntity = 'tasks' | 'projects' | 'areas' | 'notes' | 'tags' | 'inbox_items';
 
-export const TaskFilter = z.enum(['today', 'upcoming', 'someday', 'completed', 'all']);
+export const TaskFilter = z.enum(['today', 'overdue', 'upcoming', 'someday', 'completed', 'all']);
 export type TaskFilter = z.infer<typeof TaskFilter>;
 
 export const TaskSort = z.enum(['name', 'due_date', 'created_at', 'priority']);

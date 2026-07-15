@@ -8,6 +8,11 @@ import { useUiStore } from '../stores/ui';
 import { useTheme } from '../theme/theme';
 import { ensureDatabaseReady } from '../db/database';
 import { initSyncScheduler } from '../sync/scheduler';
+import {
+    initNotificationRuntime,
+    rescheduleTaskNotificationsIfEnabled,
+    cancelAllTaskNotifications,
+} from '../notifications';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
     const queryClient = useMemo(
@@ -33,6 +38,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     const hydrateUi = useUiStore((s) => s.hydrate);
     const uiHydrated = useUiStore((s) => s.hydrated);
     const [dbReady, setDbReady] = useState(false);
+    const ready = sessionHydrated && uiHydrated && dbReady;
 
     useEffect(() => {
         void hydrateSession();
@@ -45,9 +51,22 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
             }
         })();
         initSyncScheduler();
+        void initNotificationRuntime();
     }, [hydrateSession, hydrateUi]);
 
-    const ready = sessionHydrated && uiHydrated && dbReady;
+    useEffect(() => {
+        if (!ready) return;
+        void rescheduleTaskNotificationsIfEnabled();
+    }, [ready]);
+
+    useEffect(() => {
+        const unsub = useSessionStore.subscribe((state, prev) => {
+            if (!state.session && prev.session) {
+                void cancelAllTaskNotifications();
+            }
+        });
+        return unsub;
+    }, []);
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>

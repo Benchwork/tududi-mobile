@@ -46,6 +46,7 @@ export interface TaskFormProps {
     initial?: TaskFormValues;
     submitting?: boolean;
     submitLabel?: string;
+    scrollable?: boolean;
     onSubmit: (values: TaskFormValues) => void | Promise<void>;
     onDelete?: () => void;
 }
@@ -73,6 +74,7 @@ export function TaskForm({
     onDelete,
     submitting,
     submitLabel = 'Save',
+    scrollable = true,
 }: TaskFormProps) {
     const { palette, radius } = useTheme();
     const [values, setValues] = useState<TaskFormValues>(
@@ -87,12 +89,8 @@ export function TaskForm({
         value: TaskFormValues[K]
     ) => setValues((prev) => ({ ...prev, [key]: value }));
 
-    return (
-        <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+    const fields = (
+        <>
                 <TextField
                     label="Name"
                     value={values.name}
@@ -359,6 +357,20 @@ export function TaskForm({
                         style={{ marginTop: 8 }}
                     />
                 ) : null}
+        </>
+    );
+
+    if (!scrollable) {
+        return <View style={{ padding: 16 }}>{fields}</View>;
+    }
+
+    return (
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+                {fields}
             </ScrollView>
         </KeyboardAvoidingView>
     );

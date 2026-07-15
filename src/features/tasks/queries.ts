@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tasksRepo, type TaskQuery } from '../../db/repositories';
 import type { Task } from '../../types/tududi';
-import { toServerTaskPayload } from '../../api/taskMaps';
+import { taskToServerPayload, toServerTaskPayload } from '../../api/taskMaps';
 import { enqueue } from '../../sync/outbox';
 import { useSyncStore } from '../../sync/scheduler';
+import { queueRescheduleTaskNotifications } from '../../notifications';
 
 export const taskKeys = {
     all: ['tasks'] as const,
@@ -29,6 +30,7 @@ export function useTask(uid: string | undefined) {
 
 function invalidateTasks(qc: ReturnType<typeof useQueryClient>) {
     void qc.invalidateQueries({ queryKey: taskKeys.all });
+    queueRescheduleTaskNotifications();
 }
 
 function runSync() {
@@ -121,20 +123,5 @@ export function useDeleteTask() {
 }
 
 function buildTaskPayload(t: Task): Partial<Task> {
-    return toServerTaskPayload({
-        name: t.name,
-        note: t.note ?? null,
-        status: t.status ?? 'pending',
-        priority: t.priority ?? null,
-        due_date: t.due_date ?? null,
-        project_id: t.project_id ?? null,
-        parent_task_id: t.parent_task_id ?? null,
-        recurring_pattern: t.recurring_pattern ?? null,
-        recurring_interval: t.recurring_interval ?? null,
-        recurring_end_date: t.recurring_end_date ?? null,
-        recurring_weekday: t.recurring_weekday ?? null,
-        recurring_week_of_month: t.recurring_week_of_month ?? null,
-        recurrence_completion_based: t.recurrence_completion_based ?? false,
-        completed_at: t.completed_at ?? null,
-    }) as Partial<Task>;
+    return taskToServerPayload(t) as Partial<Task>;
 }

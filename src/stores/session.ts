@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { configureApi, type SessionState } from '../api/client';
+import { getCsrfToken } from '../api/login';
 
 const STORAGE_KEY = 'tududi.session';
 const LAST_SERVER_KEY = 'tududi.lastServer';
@@ -127,6 +128,15 @@ export function getApiSession(): SessionState | null {
 
 configureApi({
     getSession: getApiSession,
+    refreshSessionCsrf: async () => {
+        const store = useSessionStore.getState();
+        const s = store.session;
+        if (!s || s.authMode !== 'session' || !s.cookie) return getApiSession();
+        const csrfToken = await getCsrfToken(s.serverUrl, s.cookie);
+        if (!csrfToken) return getApiSession();
+        await store.updateSession({ csrfToken });
+        return getApiSession();
+    },
     onUnauthorized: async () => {
         const store = useSessionStore.getState();
         if (store.session) {

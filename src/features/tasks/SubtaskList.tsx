@@ -22,9 +22,14 @@ const styles = StyleSheet.create({
         gap: 8,
         marginTop: 4,
     },
+    addField: {
+        flex: 1,
+        minWidth: 0,
+    },
     addBtn: {
         width: 44,
         height: 44,
+        flexShrink: 0,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -106,14 +111,16 @@ export function SubtaskList({ parentUid, parentTaskId }: SubtaskListProps) {
             ))}
 
             <View style={styles.addRow}>
-                <TextField
-                    value={draft}
-                    onChangeText={setDraft}
-                    placeholder="Add subtask"
-                    style={{ marginBottom: 0, flex: 1 }}
-                    returnKeyType="done"
-                    onSubmitEditing={onAdd}
-                />
+                <View style={styles.addField}>
+                    <TextField
+                        value={draft}
+                        onChangeText={setDraft}
+                        placeholder="Add subtask"
+                        style={{ marginBottom: 0 }}
+                        returnKeyType="done"
+                        onSubmitEditing={onAdd}
+                    />
+                </View>
                 <Pressable
                     onPress={onAdd}
                     style={[

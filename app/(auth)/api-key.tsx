@@ -77,7 +77,7 @@ export default function ApiKeyScreen() {
 
                     <TextField
                         label="API key"
-                        placeholder="tdd_..."
+                        placeholder="tt_..."
                         value={token}
                         onChangeText={setToken}
                         autoCapitalize="none"

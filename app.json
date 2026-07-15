@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tududi",
     "slug": "tududi-mobile",
-    "version": "0.0.3",
+    "version": "0.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "tududi",
@@ -36,7 +36,10 @@
       "package": "com.tududi.mobile",
       "permissions": [
         "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
       ],
       "intentFilters": [
         {
@@ -77,6 +80,12 @@
         "expo-background-fetch",
         {
           "enableBackgroundRemoteNotifications": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0f172a"
         }
       ],
       "expo-asset"

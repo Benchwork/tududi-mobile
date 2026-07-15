@@ -11,6 +11,7 @@ import { SubtaskList } from '@/features/tasks/SubtaskList';
 import {
     useDeleteTask,
     useTask,
+    useToggleTask,
     useUpdateTask,
 } from '@/features/tasks/queries';
 import { useTheme } from '@/theme/theme';
@@ -18,10 +19,11 @@ import { useTheme } from '@/theme/theme';
 export default function TaskDetailScreen() {
     const { uid } = useLocalSearchParams<{ uid: string }>();
     const router = useRouter();
-    const { palette } = useTheme();
+    const { palette, radius } = useTheme();
     const { data: task, isLoading } = useTask(uid);
     const update = useUpdateTask();
     const del = useDeleteTask();
+    const toggle = useToggleTask();
 
     const initial = useMemo(() => toFormValues(task ?? null), [task]);
 
@@ -35,6 +37,8 @@ export default function TaskDetailScreen() {
             </Screen>
         );
     }
+
+    const completed = task.status === 'completed';
 
     const onSubmit = async (values: TaskFormValues) => {
         if (!values.name.trim()) {
@@ -76,12 +80,56 @@ export default function TaskDetailScreen() {
         ]);
     };
 
+    const onToggleComplete = () => {
+        toggle.mutate({ uid: task.uid!, completed: !completed });
+    };
+
     const hasParent = !!task.parent_task_id && task.parent_task_id > 0;
 
     return (
         <Screen padded={false}>
             <Stack.Screen options={{ title: task.name || 'Task', headerShown: true }} />
-            <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+            <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
+                <Pressable
+                    onPress={onToggleComplete}
+                    disabled={toggle.isPending}
+                    style={({ pressed }) => [
+                        styles.completeRow,
+                        {
+                            backgroundColor: palette.bgElevated,
+                            borderColor: palette.border,
+                            borderRadius: radius.md,
+                            opacity: pressed ? 0.85 : 1,
+                        },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={completed ? 'Mark incomplete' : 'Mark complete'}
+                >
+                    <View
+                        style={[
+                            styles.check,
+                            {
+                                borderColor: completed ? palette.success : palette.border,
+                                backgroundColor: completed ? palette.success : 'transparent',
+                            },
+                        ]}
+                    >
+                        {completed ? (
+                            <Text style={styles.checkMark}>✓</Text>
+                        ) : null}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: palette.text, fontSize: 16, fontWeight: '600' }}>
+                            {completed ? 'Completed' : 'Mark complete'}
+                        </Text>
+                        <Text style={{ color: palette.textMuted, fontSize: 13, marginTop: 2 }}>
+                            {completed
+                                ? 'Tap to move back to your active list'
+                                : 'Tap when this task is done'}
+                        </Text>
+                    </View>
+                </Pressable>
+
                 {hasParent ? (
                     <View style={styles.parentBanner}>
                         <Pressable
@@ -96,7 +144,8 @@ export default function TaskDetailScreen() {
                                 ↥ Open parent task (edit recurrence)
                             </Text>
                             <Text style={{ color: palette.textMuted, fontSize: 12, marginTop: 2 }}>
-                                This is a generated instance of a recurring task. Edit the parent to change how it repeats.
+                                This is a generated instance of a recurring task. Edit the parent to
+                                change how it repeats.
                             </Text>
                         </Pressable>
                     </View>
@@ -106,6 +155,7 @@ export default function TaskDetailScreen() {
                     initial={initial}
                     submitLabel="Save changes"
                     submitting={update.isPending}
+                    scrollable={false}
                     onSubmit={onSubmit}
                     onDelete={onDelete}
                 />
@@ -121,8 +171,33 @@ export default function TaskDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+    completeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginHorizontal: 16,
+        marginTop: 16,
+        marginBottom: 8,
+        padding: 14,
+        borderWidth: 1,
+    },
+    check: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        borderWidth: 2,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    checkMark: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '700',
+        marginTop: -1,
+    },
     parentBanner: {
-        margin: 16,
+        marginHorizontal: 16,
+        marginBottom: 8,
         padding: 12,
         borderWidth: 1,
         borderColor: 'rgba(99,102,241,0.3)',

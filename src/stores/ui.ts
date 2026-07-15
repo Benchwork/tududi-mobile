@@ -12,6 +12,9 @@ export interface UiPrefs {
     taskSort: TaskSort;
     taskSortDir: 'asc' | 'desc';
     locale: string;
+    notificationsEnabled: boolean;
+    reminderHour: number;
+    reminderMinute: number;
 }
 
 const defaultPrefs: UiPrefs = {
@@ -20,6 +23,9 @@ const defaultPrefs: UiPrefs = {
     taskSort: 'due_date',
     taskSortDir: 'asc',
     locale: 'en',
+    notificationsEnabled: false,
+    reminderHour: 9,
+    reminderMinute: 0,
 };
 
 interface UiStore extends UiPrefs {

@@ -1,8 +1,9 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { format, isToday, isTomorrow, isYesterday, parseISO } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { useTheme } from '../../theme/theme';
 import { priorityColor } from '../../theme/colors';
+import { dueDay, isDueBeforeToday, isDueToday } from '../../utils/dates';
 import type { Task } from '../../types/tududi';
 
 export interface TaskRowProps {
@@ -14,10 +15,18 @@ export interface TaskRowProps {
 
 function formatDueDate(iso: string): string {
     try {
+        const day = dueDay(iso);
+        if (day && /^\d{4}-\d{2}-\d{2}$/.test(iso.trim())) {
+            if (isDueToday(iso)) return 'Today';
+            return format(parseISO(day), 'EEE d MMM');
+        }
         const d = parseISO(iso);
-        if (isToday(d)) return `Today, ${format(d, 'HH:mm')}`;
-        if (isTomorrow(d)) return `Tomorrow, ${format(d, 'HH:mm')}`;
-        if (isYesterday(d)) return `Yesterday, ${format(d, 'HH:mm')}`;
+        if (isDueToday(iso)) return `Today, ${format(d, 'HH:mm')}`;
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        if (dueDay(iso) === dueDay(tomorrow.toISOString())) {
+            return `Tomorrow, ${format(d, 'HH:mm')}`;
+        }
         return format(d, 'EEE d MMM');
     } catch {
         return iso;
@@ -25,12 +34,8 @@ function formatDueDate(iso: string): string {
 }
 
 function isOverdue(iso: string | null | undefined, status: Task['status']): boolean {
-    if (!iso || status === 'completed') return false;
-    try {
-        return parseISO(iso).getTime() < Date.now();
-    } catch {
-        return false;
-    }
+    if (!iso || status === 'completed' || status === 'archived') return false;
+    return isDueBeforeToday(iso);
 }
 
 export function TaskRow({ task, onPress, onToggle, compact }: TaskRowProps) {
